@@ -190,10 +190,83 @@ class Store:
     def scan(
         self,
         table,
-        key,
-        column_family=None
+        column_family=None,
+        start_key=None,
+        stop_key=None
     ):
-        raise NotImplementedError
+        table = table.lower()
+
+        if column_family is None:
+            column_family = self.DEFAULT_COLUMN_FAMILY
+        column_family = column_family.lower()
+
+        if start_key is not None and stop_key is not None:
+            query = psycopg2.sql.SQL(
+                """
+                    SELECT {column_family}
+                    FROM {table}
+                    WHERE key >= %s AND key <= %s
+                    ;
+                """
+            ).format(
+                table=psycopg2.sql.Identifier(table),
+                column_family=psycopg2.sql.Identifier(column_family)
+            )
+            query_variables = (start_key, stop_key)
+
+        elif start_key is not None:
+            query = psycopg2.sql.SQL(
+                """
+                    SELECT {column_family}
+                    FROM {table}
+                    WHERE key >= %s
+                    ;
+                """
+            ).format(
+                table=psycopg2.sql.Identifier(table),
+                column_family=psycopg2.sql.Identifier(column_family)
+            )
+            query_variables = (start_key,)
+
+        elif stop_key is not None:
+            query = psycopg2.sql.SQL(
+                """
+                    SELECT {column_family}
+                    FROM {table}
+                    WHERE key <= %s
+                    ;
+                """
+            ).format(
+                table=psycopg2.sql.Identifier(table),
+                column_family=psycopg2.sql.Identifier(column_family)
+            )
+            query_variables = (stop_key,)
+
+        else:
+            raise ValueError('start_key or stop_key must be provided')
+
+        autocommit = True if self._cursor is None else False
+        if autocommit:
+            self.begin_transaction()
+
+        try:
+            self._cursor.execute(query, query_variables)
+        except (
+            psycopg2.errors.UndefinedTable,
+            psycopg2.errors.UndefinedColumn
+        ):
+            return None
+
+        rows = self._cursor.fetchall()
+
+        if autocommit:
+            self.commit_transaction()
+
+        for row in rows:
+            result = row[0]
+            if isinstance(result, memoryview):
+                result = result.tobytes()
+            yield row[0]
 
     def _create_table(self, table):
         autocommit = True if self._cursor is None else False
