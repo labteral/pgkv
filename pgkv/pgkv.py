@@ -82,14 +82,15 @@ class Store:
         if table not in self._known_tables:
             self._known_tables[table] = set()
             self._create_table(table)
+            self._configure_distributed_table(table)
 
-        if column_family not in self._known_tables[table]:
-            self._create_column_family(
-                table,
-                column_family,
-                value
-            )
-            self._known_tables[table].add(column_family)
+        # if column_family not in self._known_tables[table]:
+        #     self._create_column_family(
+        #         table,
+        #         column_family,
+        #         value
+        #     )
+        #     self._known_tables[table].add(column_family)
 
         autocommit = True if self._cursor is None else False
         if autocommit:
@@ -203,7 +204,7 @@ class Store:
         if start_key is not None and stop_key is not None:
             query = psycopg2.sql.SQL(
                 """
-                    SELECT {column_family}
+                    SELECT key, {column_family}
                     FROM {table}
                     WHERE key >= %s AND key <= %s
                     ;
@@ -217,7 +218,7 @@ class Store:
         elif start_key is not None:
             query = psycopg2.sql.SQL(
                 """
-                    SELECT {column_family}
+                    SELECT key, {column_family}
                     FROM {table}
                     WHERE key >= %s
                     ;
@@ -231,7 +232,7 @@ class Store:
         elif stop_key is not None:
             query = psycopg2.sql.SQL(
                 """
-                    SELECT {column_family}
+                    SELECT key, {column_family}
                     FROM {table}
                     WHERE key <= %s
                     ;
@@ -263,12 +264,43 @@ class Store:
             self.commit_transaction()
 
         for row in rows:
-            result = row[0]
+            result = row[1]
             if isinstance(result, memoryview):
                 result = result.tobytes()
-            yield row[0]
+            yield (row[0], result)
 
-    def _create_table(self, table):
+    def _configure_distributed_table(
+        self,
+        table
+    ):
+        autocommit = True if self._cursor is None else False
+        if autocommit:
+            self.begin_transaction()
+
+        try:
+            query = """
+                SELECT create_distributed_table(
+                    CAST(%s AS TEXT),
+                    'key',
+                    colocate_with => 'none'
+                );
+                ;
+            """
+            self._cursor.execute(query, (table,))
+
+        except psycopg2.errors.InvalidTableDefinition:
+            # Already distributed table
+            return
+        except psycopg2.errors.UndefinedFunction:
+            return
+        finally:
+            if autocommit:
+                self.commit_transaction()
+
+    def _create_table(
+        self,
+        table
+    ):
         autocommit = True if self._cursor is None else False
         if autocommit:
             self.begin_transaction()
@@ -326,18 +358,34 @@ class Store:
         if autocommit:
             self.begin_transaction()
 
+        # With citus enabled ADD COLUMN IF NOT EXISTS fails if it exists
+        columnExists = False
         query = psycopg2.sql.SQL(
             """
-                ALTER TABLE {table}
-                ADD COLUMN IF NOT EXISTS {column_family} {column_type}
-                ;
+                SELECT {column_family} FROM {table} LIMIT 1;
             """
         ).format(
             table=psycopg2.sql.Identifier(table),
             column_family=psycopg2.sql.Identifier(column_family),
-            column_type=psycopg2.sql.SQL(column_type),
         )
-        self._cursor.execute(query)
+        try:
+            self._cursor.execute(query)
+        except psycopg2.errors.InFailedSqlTransaction:
+            columnExists = True
+
+        if not columnExists:
+            query = psycopg2.sql.SQL(
+                """
+                    ALTER TABLE {table}
+                    ADD COLUMN IF NOT EXISTS {column_family} {column_type}
+                    ;
+                """
+            ).format(
+                table=psycopg2.sql.Identifier(table),
+                column_family=psycopg2.sql.Identifier(column_family),
+                column_type=psycopg2.sql.SQL(column_type),
+            )
+            self._cursor.execute(query)
 
         if autocommit:
             self.commit_transaction()
@@ -358,18 +406,23 @@ class Store:
         try:
             query = psycopg2.sql.SQL(
                 """
-                    CREATE DATABASE {database}
-                    ;
+                    CREATE DATABASE {database};
                 """
             ).format(
                 database=psycopg2.sql.Identifier(self._database),
             )
             connection.cursor().execute(query)
-
         except psycopg2.errors.DuplicateDatabase:
             pass
-        finally:
-            connection.close()
+
+        # Enable the extension for this namespace
+        try:
+            query = "CREATE EXTENSION IF NOT EXISTS citus;"
+            connection.cursor().execute(query)
+        except psycopg2.errors.UndefinedFile:
+            pass
+
+        connection.close()
 
     def _connect(self):
         self._connection = psycopg2.connect(
