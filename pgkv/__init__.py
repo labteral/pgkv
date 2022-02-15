@@ -3,4 +3,4 @@
 
 from .pgkv import *
 
-__version__ = '0.2202.1'
+__version__ = '0.2202.2'
