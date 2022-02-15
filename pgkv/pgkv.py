@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from multiprocessing.sharedctypes import Value
 import psycopg2
 import psycopg2.sql
 import json
@@ -84,13 +85,13 @@ class Store:
             self._create_table(table)
             self._configure_distributed_table(table)
 
-        # if column_family not in self._known_tables[table]:
-        #     self._create_column_family(
-        #         table,
-        #         column_family,
-        #         value
-        #     )
-        #     self._known_tables[table].add(column_family)
+        if column_family not in self._known_tables[table]:
+            self._create_column_family(
+                table,
+                column_family,
+                value
+            )
+            self._known_tables[table].add(column_family)
 
         autocommit = True if self._cursor is None else False
         if autocommit:
@@ -194,9 +195,17 @@ class Store:
         column_family=None,
         start_key=None,
         stop_key=None,
+        order=None,
         limit=None
     ):
         table = table.lower()
+
+        if order and not isinstance(order, str):
+            raise TypeError('order must be a string')
+        order = order.upper() or 'ASC'
+        if order and order not in ('ASC', 'DESC'):
+            raise ValueError('order must be ASC or DESC')
+        order_line = f'ORDER BY key {order}'
 
         if limit and not isinstance(limit, int):
             raise TypeError
@@ -207,13 +216,14 @@ class Store:
             column_family = self.DEFAULT_COLUMN_FAMILY
         column_family = column_family.lower()
 
+        query = """
+            SELECT key, {column_family}
+            FROM {table}
+        """
+
         if start_key is not None and stop_key is not None:
-            query = """
-                SELECT key, {column_family}
-                FROM {table}
-                WHERE key >= %s AND key <= %s
-                ORDER BY key ASC
-            """ + limit_line
+            query += ('WHERE key >= %s AND key <= %s'
+                      + order_line + ' ' + limit_line)
             query = psycopg2.sql.SQL(query).format(
                 table=psycopg2.sql.Identifier(table),
                 column_family=psycopg2.sql.Identifier(column_family)
@@ -221,12 +231,7 @@ class Store:
             query_variables = (start_key, stop_key)
 
         elif start_key is not None:
-            query = """
-                SELECT key, {column_family}
-                FROM {table}
-                WHERE key >= %s
-                ORDER BY key ASC
-            """ + limit_line
+            query += ('WHERE key >= %s' + order_line + ' ' + limit_line)
             query = psycopg2.sql.SQL(query).format(
                 table=psycopg2.sql.Identifier(table),
                 column_family=psycopg2.sql.Identifier(column_family)
@@ -234,12 +239,7 @@ class Store:
             query_variables = (start_key,)
 
         elif stop_key is not None:
-            query = """
-                SELECT key, {column_family}
-                FROM {table}
-                WHERE key <= %s
-                ORDER BY key ASC
-            """ + limit_line
+            query += ('WHERE key <= %s' + order_line + ' ' + limit_line)
             query = psycopg2.sql.SQL(query).format(
                 table=psycopg2.sql.Identifier(table),
                 column_family=psycopg2.sql.Identifier(column_family)
@@ -283,7 +283,7 @@ class Store:
         try:
             query = """
                 SELECT create_distributed_table(
-                    CAST(%s AS TEXT),
+                    %s,
                     'key',
                     colocate_with => 'none'
                 );
