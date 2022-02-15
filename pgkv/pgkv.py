@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from multiprocessing.sharedctypes import Value
 import psycopg2
 import psycopg2.sql
 import json
+from datetime import datetime
 
 
 class Store:
@@ -109,8 +109,7 @@ class Store:
                 %s
             )
             ON CONFLICT (key) DO UPDATE
-            SET {column_family} = %s
-            ;
+            SET {column_family} = %s;
         """
         ).format(
             table=psycopg2.sql.Identifier(table),
@@ -154,8 +153,7 @@ class Store:
                 SELECT {column_family}
                 FROM {table}
                 WHERE key = %s
-                LIMIT 1
-                ;
+                LIMIT 1;
             """
         ).format(
             table=psycopg2.sql.Identifier(table),
@@ -172,6 +170,8 @@ class Store:
             psycopg2.errors.UndefinedTable,
             psycopg2.errors.UndefinedColumn
         ):
+            if autocommit:
+                self.commit_transaction()
             return None
 
         row = self._cursor.fetchone()
@@ -189,6 +189,14 @@ class Store:
         return result
 
     @rollback
+    def exists(
+        self,
+        table,
+        key
+    ):
+        return True if self.get(table, key) else False
+
+    @rollback
     def scan(
         self,
         table,
@@ -202,7 +210,7 @@ class Store:
 
         if order and not isinstance(order, str):
             raise TypeError('order must be a string')
-        order = order.upper() or 'ASC'
+        order = order.upper() if order else 'ASC'
         if order and order not in ('ASC', 'DESC'):
             raise ValueError('order must be ASC or DESC')
         order_line = f'ORDER BY key {order}'
@@ -259,6 +267,8 @@ class Store:
             psycopg2.errors.UndefinedTable,
             psycopg2.errors.UndefinedColumn
         ):
+            if autocommit:
+                self.commit_transaction()
             return None
 
         rows = self._cursor.fetchall()
@@ -287,7 +297,6 @@ class Store:
                     'key',
                     colocate_with => 'none'
                 );
-                ;
             """
             self._cursor.execute(query, (table,))
 
@@ -313,9 +322,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS {table}
                 (
                     key TEXT NOT NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
                     PRIMARY KEY (key)
-                )
-                ;
+                );
             """
         ).format(
             table=psycopg2.sql.Identifier(table)
@@ -325,8 +334,10 @@ class Store:
         query = psycopg2.sql.SQL(
             """
                 CREATE INDEX IF NOT EXISTS key_hash_idx
-                ON {table} USING HASH (key)
-                ;
+                ON {table} USING HASH (key);
+
+                CREATE INDEX IF NOT EXISTS key_created_at_idx
+                ON {table} (created_at);
             """
         ).format(
             table=psycopg2.sql.Identifier(table)
@@ -354,6 +365,8 @@ class Store:
             column_type = 'DECIMAL'
         elif isinstance(sample_value, bytes):
             column_type = 'BYTEA'
+        elif isinstance(sample_value, datetime):
+            column_type = 'TIMESTAMP WITHOUT TIME ZONE'
         else:
             raise ValueError
 
@@ -362,26 +375,33 @@ class Store:
             self.begin_transaction()
 
         # With citus enabled ADD COLUMN IF NOT EXISTS fails if it exists
-        columnExists = False
         query = psycopg2.sql.SQL(
-            """
-                SELECT {column_family} FROM {table} LIMIT 1;
-            """
+            'SELECT {column_family} FROM {table} LIMIT 1;'
         ).format(
             table=psycopg2.sql.Identifier(table),
             column_family=psycopg2.sql.Identifier(column_family),
         )
+
+        columnExists = False
         try:
             self._cursor.execute(query)
         except psycopg2.errors.InFailedSqlTransaction:
             columnExists = True
+        except psycopg2.errors.UndefinedColumn:
+            pass
+        finally:
+            if autocommit:
+                self.commit_transaction()
+
+        autocommit = True if self._cursor is None else False
+        if autocommit:
+            self.begin_transaction()
 
         if not columnExists:
             query = psycopg2.sql.SQL(
                 """
                     ALTER TABLE {table}
-                    ADD COLUMN IF NOT EXISTS {column_family} {column_type}
-                    ;
+                    ADD COLUMN IF NOT EXISTS {column_family} {column_type};
                 """
             ).format(
                 table=psycopg2.sql.Identifier(table),
@@ -408,9 +428,7 @@ class Store:
 
         try:
             query = psycopg2.sql.SQL(
-                """
-                    CREATE DATABASE {database};
-                """
+                'CREATE DATABASE {database}'
             ).format(
                 database=psycopg2.sql.Identifier(self._database),
             )
@@ -420,7 +438,7 @@ class Store:
 
         # Enable the extension for this namespace
         try:
-            query = "CREATE EXTENSION IF NOT EXISTS citus;"
+            query = 'CREATE EXTENSION IF NOT EXISTS citus;'
             connection.cursor().execute(query)
         except psycopg2.errors.UndefinedFile:
             pass
