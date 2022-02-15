@@ -19,6 +19,9 @@ store.put('table_1', 'key_1', 'value_1')
 # Get
 value = store.get('table_1', 'key_1')
 
+# Exists
+store.exists('table_1', 'key_1')
+
 # Scan
 for value in store.scan(
     'table_1',
