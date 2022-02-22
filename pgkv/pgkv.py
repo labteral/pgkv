@@ -243,7 +243,28 @@ class Store:
         table,
         key
     ):
-        raise NotImplementedError
+        table = table.lower()
+
+        query = psycopg2.sql.SQL(
+            """
+                DELETE FROM {table}
+                WHERE key = %s;
+            """
+        ).format(
+            table=psycopg2.sql.Identifier(table)
+        )
+
+        autocommit = True if self._cursor is None else False
+        if autocommit:
+            self.begin_transaction()
+
+        try:
+            self._cursor.execute(query, (key,))
+        except (
+            psycopg2.errors.UndefinedTable,
+            psycopg2.errors.UndefinedColumn
+        ):
+            pass
 
     @thread_safe
     @rollback
