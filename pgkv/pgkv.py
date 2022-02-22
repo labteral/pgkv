@@ -5,6 +5,7 @@ import psycopg2
 import psycopg2.sql
 import json
 from datetime import datetime
+from threading import Lock
 
 
 class Store:
@@ -15,9 +16,11 @@ class Store:
         host=None,
         port=None,
         namespace=None,
-        user=None,
+        username=None,
         password=None,
     ):
+        self._lock = Lock()
+
         if host is None:
             host = '127.0.0.1'
         self._host = host
@@ -28,11 +31,11 @@ class Store:
 
         if namespace is None:
             raise ValueError
-        self._database = namespace
+        self._namespace = namespace
 
-        if user is None:
-            user = 'postgres'
-        self._user = user
+        if username is None:
+            username = 'postgres'
+        self._username = username
 
         if password is None:
             password = ''
@@ -43,6 +46,34 @@ class Store:
         self._cursor = None
         self._setup_database()
         self._connect()
+
+    @property
+    def host(self):
+        return self._host
+
+    @property
+    def port(self):
+        return self._port
+
+    @property
+    def namespace(self):
+        return self._namespace
+
+    @property
+    def username(self):
+        return self._username
+
+    @property
+    def password(self):
+        return self._password
+
+    @property
+    def cursor(self):
+        return self._cursor
+
+    @property
+    def connection(self):
+        return self._connnection
 
     def begin_transaction(self):
         self._cursor = self._connection.cursor()
@@ -444,7 +475,7 @@ class Store:
             host=self._host,
             port=self._port,
             database='postgres',
-            user=self._user,
+            user=self._username,
             password=self._password,
         )
 
@@ -456,7 +487,7 @@ class Store:
             query = psycopg2.sql.SQL(
                 'CREATE DATABASE {database}'
             ).format(
-                database=psycopg2.sql.Identifier(self._database),
+                database=psycopg2.sql.Identifier(self._namespace),
             )
             connection.cursor().execute(query)
         except psycopg2.errors.DuplicateDatabase:
@@ -475,8 +506,8 @@ class Store:
         self._connection = psycopg2.connect(
             host=self._host,
             port=self._port,
-            database=self._database,
-            user=self._user,
+            database=self._namespace,
+            user=self._username,
             password=self._password,
         )
 
