@@ -83,6 +83,12 @@ class Store:
         self._cursor.close()
         self._cursor = None
 
+    def thread_safe(method):
+        def _method(self, *args, **kwargs):
+            with self._lock:
+                return method(self, *args, **kwargs)
+        return _method
+
     def rollback(method):
         def _method(self, *args, **kwargs):
             try:
@@ -97,6 +103,7 @@ class Store:
                 raise error
         return _method
 
+    @thread_safe
     @rollback
     def put(
         self,
@@ -166,6 +173,7 @@ class Store:
         if autocommit:
             self.commit_transaction()
 
+    @thread_safe
     @rollback
     def get(
         self,
@@ -219,6 +227,7 @@ class Store:
 
         return result
 
+    @thread_safe
     @rollback
     def exists(
         self,
@@ -227,6 +236,7 @@ class Store:
     ):
         return True if self.get(table, key) else False
 
+    @thread_safe
     @rollback
     def delete(
         self,
@@ -235,6 +245,7 @@ class Store:
     ):
         raise NotImplementedError
 
+    @thread_safe
     @rollback
     def scan(
         self,
