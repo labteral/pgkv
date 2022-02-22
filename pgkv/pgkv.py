@@ -197,23 +197,46 @@ class Store:
         return True if self.get(table, key) else False
 
     @rollback
+    def delete(
+        self,
+        table,
+        key
+    ):
+        raise NotImplementedError
+
+    @rollback
     def scan(
         self,
         table,
         column_family=None,
         start_key=None,
         stop_key=None,
+        order_by=None,
+        order_by_timestamp=None,
         order=None,
         limit=None
     ):
         table = table.lower()
 
-        if order and not isinstance(order, str):
-            raise TypeError('order must be a string')
+        if order is not None:
+            if isinstance(order, int):
+                if order == 1:
+                    order = 'ASC'
+                elif order == -1:
+                    order = 'DESC'
+                else:
+                    raise ValueError('order must be 1 or -1 if type is int')
+            elif not isinstance(order, str):
+                raise TypeError('order must be of type int or string')
         order = order.upper() if order else 'ASC'
         if order and order not in ('ASC', 'DESC'):
             raise ValueError('order must be ASC or DESC')
-        order_line = f'ORDER BY key {order}'
+
+        if order_by_timestamp is True:
+            order_by = 'created_at'
+        if order_by is None:
+            order_by = 'key'
+        order_line = 'ORDER BY {order_by}' + f'{order}'
 
         if limit and not isinstance(limit, int):
             raise TypeError
@@ -234,7 +257,8 @@ class Store:
                       + order_line + ' ' + limit_line)
             query = psycopg2.sql.SQL(query).format(
                 table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family)
+                column_family=psycopg2.sql.Identifier(column_family),
+                order_by=psycopg2.sql.Identifier(order_by)
             )
             query_variables = (start_key, stop_key)
 
@@ -242,7 +266,8 @@ class Store:
             query += ('WHERE key >= %s' + order_line + ' ' + limit_line)
             query = psycopg2.sql.SQL(query).format(
                 table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family)
+                column_family=psycopg2.sql.Identifier(column_family),
+                order_by=psycopg2.sql.Identifier(order_by)
             )
             query_variables = (start_key,)
 
@@ -250,7 +275,8 @@ class Store:
             query += ('WHERE key <= %s' + order_line + ' ' + limit_line)
             query = psycopg2.sql.SQL(query).format(
                 table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family)
+                column_family=psycopg2.sql.Identifier(column_family),
+                order_by=psycopg2.sql.Identifier(order_by)
             )
             query_variables = (stop_key,)
 
