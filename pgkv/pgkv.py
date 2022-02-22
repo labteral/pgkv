@@ -9,7 +9,7 @@ from threading import Lock
 
 
 class Store:
-    DEFAULT_COLUMN_FAMILY = 'cf_1'
+    DEFAULT_COLUMN_FAMILY = 'value'
 
     def __init__(
         self,
