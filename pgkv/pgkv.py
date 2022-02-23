@@ -8,6 +8,26 @@ from datetime import datetime
 from threading import Lock
 
 
+def thread_safe(method):
+    def _method(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return _method
+
+
+def rollback_on_error(method):
+    def _method(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except Exception as error:
+            try:
+                self.rollback()
+            except Exception:
+                pass
+            raise error
+    return _method
+
+
 class Store:
     DEFAULT_COLUMN_FAMILY = 'value'
 
@@ -45,7 +65,6 @@ class Store:
 
         self._cursor = None
         self._setup_database()
-        self._connect()
 
     @property
     def host(self):
@@ -75,36 +94,28 @@ class Store:
     def connection(self):
         return self._connnection
 
-    def begin_transaction(self):
+    def begin(self):
+        self._connection = self._get_connection()
+        if self.cursor is not None:
+            raise RuntimeError('transaction already started')
         self._cursor = self._connection.cursor()
 
-    def commit_transaction(self):
+    def commit(self):
+        if self.cursor is None:
+            return
         self._connection.commit()
         self._cursor.close()
         self._cursor = None
+        self._connection.close()
 
-    def thread_safe(method):
-        def _method(self, *args, **kwargs):
-            with self._lock:
-                return method(self, *args, **kwargs)
-        return _method
-
-    def rollback(method):
-        def _method(self, *args, **kwargs):
-            try:
-                return method(self, *args, **kwargs)
-            except Exception as error:
-                try:
-                    self._rollback_transaction()
-                    self._connection.close()
-                except Exception:
-                    pass
-                self._connect()
-                raise error
-        return _method
+    def rollback(self):
+        self._connection.rollback()
+        self._cursor.close()
+        self._cursor = None
+        self._connection.close()
 
     @thread_safe
-    @rollback
+    @rollback_on_error
     def put(
         self,
         table,
@@ -133,7 +144,7 @@ class Store:
 
         autocommit = True if self._cursor is None else False
         if autocommit:
-            self.begin_transaction()
+            self.begin()
 
         query = psycopg2.sql.SQL(
             """
@@ -171,10 +182,10 @@ class Store:
         )
 
         if autocommit:
-            self.commit_transaction()
+            self.commit()
 
     @thread_safe
-    @rollback
+    @rollback_on_error
     def get(
         self,
         table,
@@ -201,7 +212,7 @@ class Store:
 
         autocommit = True if self._cursor is None else False
         if autocommit:
-            self.begin_transaction()
+            self.begin()
 
         try:
             self._cursor.execute(query, (key,))
@@ -210,7 +221,7 @@ class Store:
             psycopg2.errors.UndefinedColumn
         ):
             if autocommit:
-                self.commit_transaction()
+                self.commit()
             return None
 
         row = self._cursor.fetchone()
@@ -220,7 +231,7 @@ class Store:
             result = result.tobytes()
 
         if autocommit:
-            self.commit_transaction()
+            self.commit()
 
         if not row:
             return None
@@ -228,7 +239,7 @@ class Store:
         return result
 
     @thread_safe
-    @rollback
+    @rollback_on_error
     def exists(
         self,
         table,
@@ -237,7 +248,7 @@ class Store:
         return True if self.get(table, key) else False
 
     @thread_safe
-    @rollback
+    @rollback_on_error
     def delete(
         self,
         table,
@@ -256,7 +267,7 @@ class Store:
 
         autocommit = True if self._cursor is None else False
         if autocommit:
-            self.begin_transaction()
+            self.begin()
 
         try:
             self._cursor.execute(query, (key,))
@@ -267,7 +278,7 @@ class Store:
             pass
 
     @thread_safe
-    @rollback
+    @rollback_on_error
     def scan(
         self,
         table,
@@ -348,7 +359,7 @@ class Store:
 
         autocommit = True if self._cursor is None else False
         if autocommit:
-            self.begin_transaction()
+            self.begin()
 
         try:
             self._cursor.execute(query, query_variables)
@@ -357,13 +368,13 @@ class Store:
             psycopg2.errors.UndefinedColumn
         ):
             if autocommit:
-                self.commit_transaction()
+                self.commit()
             return None
 
         rows = self._cursor.fetchall()
 
         if autocommit:
-            self.commit_transaction()
+            self.commit()
 
         for row in rows:
             result = row[1]
@@ -375,9 +386,9 @@ class Store:
         self,
         table
     ):
-        autocommit = True if self._cursor is None else False
-        if autocommit:
-            self.begin_transaction()
+        connection = self._get_connection()
+        connection.autocommit = True
+        cursor = connection.cursor()
 
         try:
             query = """
@@ -387,7 +398,7 @@ class Store:
                     colocate_with => 'none'
                 );
             """
-            self._cursor.execute(query, (table,))
+            cursor.execute(query, (table,))
 
         except psycopg2.errors.InvalidTableDefinition:
             # Already distributed table
@@ -395,16 +406,16 @@ class Store:
         except psycopg2.errors.UndefinedFunction:
             return
         finally:
-            if autocommit:
-                self.commit_transaction()
+            cursor.close()
+            connection.close()
 
     def _create_table(
         self,
         table
     ):
-        autocommit = True if self._cursor is None else False
-        if autocommit:
-            self.begin_transaction()
+        connection = self._get_connection()
+        connection.autocommit = True
+        cursor = connection.cursor()
 
         query = psycopg2.sql.SQL(
             """
@@ -418,7 +429,7 @@ class Store:
         ).format(
             table=psycopg2.sql.Identifier(table)
         )
-        self._cursor.execute(query)
+        cursor.execute(query)
 
         query = psycopg2.sql.SQL(
             """
@@ -431,10 +442,10 @@ class Store:
         ).format(
             table=psycopg2.sql.Identifier(table)
         )
-        self._cursor.execute(query)
+        cursor.execute(query)
 
-        if autocommit:
-            self.commit_transaction()
+        cursor.close()
+        connection.close()
 
     def _create_column_family(
         self,
@@ -459,9 +470,9 @@ class Store:
         else:
             raise ValueError
 
-        autocommit = True if self._cursor is None else False
-        if autocommit:
-            self.begin_transaction()
+        connection = self._get_connection()
+        connection.autocommit = True
+        cursor = connection.cursor()
 
         # With citus enabled ADD COLUMN IF NOT EXISTS fails if it exists
         query = psycopg2.sql.SQL(
@@ -471,20 +482,11 @@ class Store:
             column_family=psycopg2.sql.Identifier(column_family),
         )
 
-        columnExists = False
         try:
-            self._cursor.execute(query)
-        except psycopg2.errors.InFailedSqlTransaction:
+            cursor.execute(query)
             columnExists = True
         except psycopg2.errors.UndefinedColumn:
-            pass
-        finally:
-            if autocommit:
-                self.commit_transaction()
-
-        autocommit = True if self._cursor is None else False
-        if autocommit:
-            self.begin_transaction()
+            columnExists = False
 
         if not columnExists:
             query = psycopg2.sql.SQL(
@@ -497,23 +499,18 @@ class Store:
                 column_family=psycopg2.sql.Identifier(column_family),
                 column_type=psycopg2.sql.SQL(column_type),
             )
-            self._cursor.execute(query)
+            cursor.execute(query)
 
-        if autocommit:
-            self.commit_transaction()
+        cursor.close()
+        connection.close()
 
     def _setup_database(self):
-        connection = psycopg2.connect(
-            host=self._host,
-            port=self._port,
-            database='postgres',
-            user=self._username,
-            password=self._password,
-        )
-
+        connection = self._get_connection('postgres')
+        connection.autocommit = True
         connection.set_isolation_level(
             psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
         )
+        cursor = connection.cursor()
 
         try:
             query = psycopg2.sql.SQL(
@@ -521,33 +518,27 @@ class Store:
             ).format(
                 database=psycopg2.sql.Identifier(self._namespace),
             )
-            connection.cursor().execute(query)
+            cursor.execute(query)
         except psycopg2.errors.DuplicateDatabase:
             pass
 
         # Enable the extension for this namespace
         try:
             query = 'CREATE EXTENSION IF NOT EXISTS citus;'
-            connection.cursor().execute(query)
+            cursor.execute(query)
         except psycopg2.errors.UndefinedFile:
             pass
 
         connection.close()
 
-    def _connect(self):
-        self._connection = psycopg2.connect(
+    def _get_connection(self, namespace=None):
+        if namespace is None:
+            namespace = self._namespace
+        connection = psycopg2.connect(
             host=self._host,
             port=self._port,
-            database=self._namespace,
+            database=namespace,
             user=self._username,
-            password=self._password,
+            password=self._password
         )
-
-    def _rollback_transaction(self):
-        try:
-            self._connection.rollback()
-            self._cursor.close()
-        except Exception as error:
-            raise error
-        finally:
-            self._cursor = None
+        return connection

@@ -1,0 +1,21 @@
+version: "3.5"
+
+x-logging:
+  &default
+  options:
+    max-size: "50m"
+    max-file: "1"
+  driver: json-file
+
+services:
+  citus:
+    image: citusdata/citus:10
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    volumes:
+      - ./data/postgresql/:/var/lib/postgresql/data/:rw
+    restart: always
+    logging: *default
