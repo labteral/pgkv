@@ -327,35 +327,23 @@ class Store:
         """
 
         if start_key is not None and stop_key is not None:
-            query += ('WHERE key >= %s AND key <= %s'
-                      + order_line + ' ' + limit_line)
-            query = psycopg2.sql.SQL(query).format(
-                table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family),
-                order_by=psycopg2.sql.Identifier(order_by)
-            )
+            query += 'WHERE key >= %s AND key <= %s'
             query_variables = (start_key, stop_key)
-
         elif start_key is not None:
-            query += ('WHERE key >= %s' + order_line + ' ' + limit_line)
-            query = psycopg2.sql.SQL(query).format(
-                table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family),
-                order_by=psycopg2.sql.Identifier(order_by)
-            )
-            query_variables = (start_key,)
-
+            query += 'WHERE key >= %s'
+            query_variables = (start_key, )
         elif stop_key is not None:
-            query += ('WHERE key <= %s' + order_line + ' ' + limit_line)
-            query = psycopg2.sql.SQL(query).format(
-                table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family),
-                order_by=psycopg2.sql.Identifier(order_by)
-            )
-            query_variables = (stop_key,)
-
+            query += 'WHERE key <= %s'
+            query_variables = (stop_key, )
         else:
-            raise ValueError('start_key or stop_key must be provided')
+            query_variables = None
+
+        query += order_line + ' ' + limit_line
+        query = psycopg2.sql.SQL(query).format(
+            table=psycopg2.sql.Identifier(table),
+            column_family=psycopg2.sql.Identifier(column_family),
+            order_by=psycopg2.sql.Identifier(order_by)
+        )
 
         autocommit = True if self._cursor is None else False
         if autocommit:
