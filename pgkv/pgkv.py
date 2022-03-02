@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from numpy import isin
 import psycopg2
 import psycopg2.sql
 import json
@@ -29,7 +30,7 @@ def rollback_on_error(method):
 
 
 class Store:
-    DEFAULT_COLUMN_FAMILY = 'value'
+    DEFAULT_column = 'value'
 
     def __init__(
         self,
@@ -121,26 +122,26 @@ class Store:
         table,
         key,
         value,
-        column_family=None
+        column=None
     ):
         table = table.lower()
 
-        if column_family is None:
-            column_family = self.DEFAULT_COLUMN_FAMILY
-        column_family = column_family.lower()
+        if column is None:
+            column = self.DEFAULT_column
+        column = column.lower()
 
         if table not in self._known_tables:
             self._known_tables[table] = set()
             self._create_table(table)
             self._configure_distributed_table(table)
 
-        if column_family not in self._known_tables[table]:
-            self._create_column_family(
+        if column not in self._known_tables[table]:
+            self._create_column(
                 table,
-                column_family,
+                column,
                 value
             )
-            self._known_tables[table].add(column_family)
+            self._known_tables[table].add(column)
 
         autocommit = True if self._cursor is None else False
         if autocommit:
@@ -151,18 +152,18 @@ class Store:
             INSERT INTO {table}
             (
                 key,
-                {column_family}
+                {column}
             )
             VALUES (
                 %s,
                 %s
             )
             ON CONFLICT (key) DO UPDATE
-            SET {column_family} = %s;
+            SET {column} = %s;
         """
         ).format(
             table=psycopg2.sql.Identifier(table),
-            column_family=psycopg2.sql.Identifier(column_family),
+            column=psycopg2.sql.Identifier(column),
         )
 
         if isinstance(value, dict):
@@ -190,24 +191,29 @@ class Store:
         self,
         table,
         key,
-        column_family=None
+        column=None,
+        full_row=False
     ):
         table = table.lower()
 
-        if column_family is None:
-            column_family = self.DEFAULT_COLUMN_FAMILY
-        column_family = column_family.lower()
+        if column is None:
+            column = self.DEFAULT_column
+        column = column.lower()
 
-        query = psycopg2.sql.SQL(
-            """
-                SELECT {column_family}
-                FROM {table}
-                WHERE key = %s
-                LIMIT 1;
-            """
-        ).format(
+        query = 'SELECT '
+        if full_row is True:
+            query += '*'
+        else:
+            query += '{column}'
+        query += """
+            FROM {table}
+            WHERE key = %s
+            LIMIT 1;
+        """
+
+        query = psycopg2.sql.SQL(query).format(
             table=psycopg2.sql.Identifier(table),
-            column_family=psycopg2.sql.Identifier(column_family)
+            column=psycopg2.sql.Identifier(column)
         )
 
         autocommit = True if self._cursor is None else False
@@ -225,10 +231,7 @@ class Store:
             return None
 
         row = self._cursor.fetchone()
-        result = row[0]
-
-        if isinstance(result, memoryview):
-            result = result.tobytes()
+        result = self._get_results([row], remove_keys=True)[0]
 
         if autocommit:
             self.commit()
@@ -282,13 +285,14 @@ class Store:
     def scan(
         self,
         table,
-        column_family=None,
+        column=None,
         start_key=None,
         stop_key=None,
         order_by=None,
-        order_by_timestamp=None,
+        order_by_timestamp=False,
         order=None,
-        limit=None
+        limit=None,
+        full_row=False
     ):
         table = table.lower()
 
@@ -317,14 +321,16 @@ class Store:
         limit = limit or 'ALL'
         limit_line = f'LIMIT {limit};'
 
-        if column_family is None:
-            column_family = self.DEFAULT_COLUMN_FAMILY
-        column_family = column_family.lower()
+        if column is None:
+            column = self.DEFAULT_column
+        column = column.lower()
 
-        query = """
-            SELECT key, {column_family}
-            FROM {table}
-        """
+        query = 'SELECT '
+        if full_row is True:
+            query += '*'
+        else:
+            query += '{column}'
+        query += 'FROM {table}'
 
         if start_key is not None and stop_key is not None:
             query += 'WHERE key >= %s AND key <= %s'
@@ -341,7 +347,7 @@ class Store:
         query += order_line + ' ' + limit_line
         query = psycopg2.sql.SQL(query).format(
             table=psycopg2.sql.Identifier(table),
-            column_family=psycopg2.sql.Identifier(column_family),
+            column=psycopg2.sql.Identifier(column),
             order_by=psycopg2.sql.Identifier(order_by)
         )
 
@@ -360,15 +366,24 @@ class Store:
             return None
 
         rows = self._cursor.fetchall()
+        results = self._get_results(rows, remove_keys=False)
 
         if autocommit:
             self.commit()
 
-        for row in rows:
-            result = row[1]
-            if isinstance(result, memoryview):
-                result = result.tobytes()
-            yield (row[0], result)
+        return results
+
+    def _get_connection(self, namespace=None):
+        if namespace is None:
+            namespace = self._namespace
+        connection = psycopg2.connect(
+            host=self._host,
+            port=self._port,
+            database=namespace,
+            user=self._username,
+            password=self._password
+        )
+        return connection
 
     def _configure_distributed_table(
         self,
@@ -435,10 +450,10 @@ class Store:
         cursor.close()
         connection.close()
 
-    def _create_column_family(
+    def _create_column(
         self,
         table,
-        column_family,
+        column,
         sample_value
     ):
         if isinstance(sample_value, str):
@@ -464,10 +479,10 @@ class Store:
 
         # With citus enabled ADD COLUMN IF NOT EXISTS fails if it exists
         query = psycopg2.sql.SQL(
-            'SELECT {column_family} FROM {table} LIMIT 1;'
+            'SELECT {column} FROM {table} LIMIT 1;'
         ).format(
             table=psycopg2.sql.Identifier(table),
-            column_family=psycopg2.sql.Identifier(column_family),
+            column=psycopg2.sql.Identifier(column),
         )
 
         try:
@@ -480,11 +495,11 @@ class Store:
             query = psycopg2.sql.SQL(
                 """
                     ALTER TABLE {table}
-                    ADD COLUMN IF NOT EXISTS {column_family} {column_type};
+                    ADD COLUMN IF NOT EXISTS {column} {column_type};
                 """
             ).format(
                 table=psycopg2.sql.Identifier(table),
-                column_family=psycopg2.sql.Identifier(column_family),
+                column=psycopg2.sql.Identifier(column),
                 column_type=psycopg2.sql.SQL(column_type),
             )
             cursor.execute(query)
@@ -519,14 +534,21 @@ class Store:
 
         connection.close()
 
-    def _get_connection(self, namespace=None):
-        if namespace is None:
-            namespace = self._namespace
-        connection = psycopg2.connect(
-            host=self._host,
-            port=self._port,
-            database=namespace,
-            user=self._username,
-            password=self._password
-        )
-        return connection
+    def _get_results(self, rows, remove_keys=False):
+        columns = [description[0] for description in self._cursor.description]
+
+        results = []
+        for row in rows:
+            result = {}
+
+            for index, column in enumerate(columns):
+                value = row[index]
+                if remove_keys is True and column == 'key':
+                    continue
+                if isinstance(value, memoryview):
+                    value = result.tobytes()
+                result[column] = row[index]
+
+            results.append(result)
+
+        return results
