@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from numpy import isin
 import psycopg2
 import psycopg2.sql
 import json
@@ -13,6 +12,7 @@ def thread_safe(method):
     def _method(self, *args, **kwargs):
         with self._lock:
             return method(self, *args, **kwargs)
+
     return _method
 
 
@@ -26,6 +26,7 @@ def rollback_on_error(method):
             except Exception:
                 pass
             raise error
+
     return _method
 
 
@@ -117,13 +118,7 @@ class Store:
 
     @thread_safe
     @rollback_on_error
-    def put(
-        self,
-        table,
-        key,
-        value,
-        column=None
-    ):
+    def put(self, table, key, value, column=None):
         table = table.lower()
 
         if column is None:
@@ -136,19 +131,14 @@ class Store:
             self._configure_distributed_table(table)
 
         if column not in self._known_tables[table]:
-            self._create_column(
-                table,
-                column,
-                value
-            )
+            self._create_column(table, column, value)
             self._known_tables[table].add(column)
 
         autocommit = True if self._cursor is None else False
         if autocommit:
             self.begin()
 
-        query = psycopg2.sql.SQL(
-            """
+        query = psycopg2.sql.SQL("""
             INSERT INTO {table}
             (
                 key,
@@ -160,40 +150,24 @@ class Store:
             )
             ON CONFLICT (key) DO UPDATE
             SET {column} = %s;
-        """
-        ).format(
+        """).format(
             table=psycopg2.sql.Identifier(table),
             column=psycopg2.sql.Identifier(column),
         )
 
         if isinstance(value, dict):
-            value = json.dumps(
-                value,
-                ensure_ascii=False,
-                separators=(',', ':')
-            )
+            value = json.dumps(value,
+                               ensure_ascii=False,
+                               separators=(',', ':'))
 
-        self._cursor.execute(
-            query,
-            (
-                key,
-                value,
-                value
-            )
-        )
+        self._cursor.execute(query, (key, value, value))
 
         if autocommit:
             self.commit()
 
     @thread_safe
     @rollback_on_error
-    def get(
-        self,
-        table,
-        key,
-        column=None,
-        full_row=False
-    ):
+    def get(self, table, key, column=None, full_row=False):
         table = table.lower()
 
         if column is None:
@@ -213,19 +187,16 @@ class Store:
 
         query = psycopg2.sql.SQL(query).format(
             table=psycopg2.sql.Identifier(table),
-            column=psycopg2.sql.Identifier(column)
-        )
+            column=psycopg2.sql.Identifier(column))
 
         autocommit = True if self._cursor is None else False
         if autocommit:
             self.begin()
 
         try:
-            self._cursor.execute(query, (key,))
-        except (
-            psycopg2.errors.UndefinedTable,
-            psycopg2.errors.UndefinedColumn
-        ):
+            self._cursor.execute(query, (key, ))
+        except (psycopg2.errors.UndefinedTable,
+                psycopg2.errors.UndefinedColumn):
             if autocommit:
                 self.commit()
             return None
@@ -243,57 +214,41 @@ class Store:
 
     @thread_safe
     @rollback_on_error
-    def exists(
-        self,
-        table,
-        key
-    ):
+    def exists(self, table, key):
         return True if self.get(table, key) else False
 
     @thread_safe
     @rollback_on_error
-    def delete(
-        self,
-        table,
-        key
-    ):
+    def delete(self, table, key):
         table = table.lower()
 
-        query = psycopg2.sql.SQL(
-            """
+        query = psycopg2.sql.SQL("""
                 DELETE FROM {table}
                 WHERE key = %s;
-            """
-        ).format(
-            table=psycopg2.sql.Identifier(table)
-        )
+            """).format(table=psycopg2.sql.Identifier(table))
 
         autocommit = True if self._cursor is None else False
         if autocommit:
             self.begin()
 
         try:
-            self._cursor.execute(query, (key,))
-        except (
-            psycopg2.errors.UndefinedTable,
-            psycopg2.errors.UndefinedColumn
-        ):
+            self._cursor.execute(query, (key, ))
+        except (psycopg2.errors.UndefinedTable,
+                psycopg2.errors.UndefinedColumn):
             pass
 
     @thread_safe
     @rollback_on_error
-    def scan(
-        self,
-        table,
-        column=None,
-        start_key=None,
-        stop_key=None,
-        order_by=None,
-        order_by_timestamp=False,
-        order=None,
-        limit=None,
-        full_row=False
-    ):
+    def scan(self,
+             table,
+             column=None,
+             start_key=None,
+             stop_key=None,
+             order_by=None,
+             order_by_timestamp=False,
+             order=None,
+             limit=None,
+             full_row=False):
         table = table.lower()
 
         if order is not None:
@@ -348,8 +303,7 @@ class Store:
         query = psycopg2.sql.SQL(query).format(
             table=psycopg2.sql.Identifier(table),
             column=psycopg2.sql.Identifier(column),
-            order_by=psycopg2.sql.Identifier(order_by)
-        )
+            order_by=psycopg2.sql.Identifier(order_by))
 
         autocommit = True if self._cursor is None else False
         if autocommit:
@@ -357,10 +311,8 @@ class Store:
 
         try:
             self._cursor.execute(query, query_variables)
-        except (
-            psycopg2.errors.UndefinedTable,
-            psycopg2.errors.UndefinedColumn
-        ):
+        except (psycopg2.errors.UndefinedTable,
+                psycopg2.errors.UndefinedColumn):
             if autocommit:
                 self.commit()
             return None
@@ -376,19 +328,14 @@ class Store:
     def _get_connection(self, namespace=None):
         if namespace is None:
             namespace = self._namespace
-        connection = psycopg2.connect(
-            host=self._host,
-            port=self._port,
-            database=namespace,
-            user=self._username,
-            password=self._password
-        )
+        connection = psycopg2.connect(host=self._host,
+                                      port=self._port,
+                                      database=namespace,
+                                      user=self._username,
+                                      password=self._password)
         return connection
 
-    def _configure_distributed_table(
-        self,
-        table
-    ):
+    def _configure_distributed_table(self, table):
         connection = self._get_connection()
         connection.autocommit = True
         cursor = connection.cursor()
@@ -401,7 +348,7 @@ class Store:
                     colocate_with => 'none'
                 );
             """
-            cursor.execute(query, (table,))
+            cursor.execute(query, (table, ))
 
         except psycopg2.errors.InvalidTableDefinition:
             # Already distributed table
@@ -412,50 +359,34 @@ class Store:
             cursor.close()
             connection.close()
 
-    def _create_table(
-        self,
-        table
-    ):
+    def _create_table(self, table):
         connection = self._get_connection()
         connection.autocommit = True
         cursor = connection.cursor()
 
-        query = psycopg2.sql.SQL(
-            """
+        query = psycopg2.sql.SQL("""
                 CREATE TABLE IF NOT EXISTS {table}
                 (
                     key TEXT NOT NULL,
                     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
                     PRIMARY KEY (key)
                 );
-            """
-        ).format(
-            table=psycopg2.sql.Identifier(table)
-        )
+            """).format(table=psycopg2.sql.Identifier(table))
         cursor.execute(query)
 
-        query = psycopg2.sql.SQL(
-            """
+        query = psycopg2.sql.SQL("""
                 CREATE INDEX IF NOT EXISTS key_hash_idx
                 ON {table} USING HASH (key);
 
                 CREATE INDEX IF NOT EXISTS key_created_at_idx
                 ON {table} (created_at);
-            """
-        ).format(
-            table=psycopg2.sql.Identifier(table)
-        )
+            """).format(table=psycopg2.sql.Identifier(table))
         cursor.execute(query)
 
         cursor.close()
         connection.close()
 
-    def _create_column(
-        self,
-        table,
-        column,
-        sample_value
-    ):
+    def _create_column(self, table, column, sample_value):
         if isinstance(sample_value, str):
             column_type = 'TEXT'
         elif isinstance(sample_value, dict):
@@ -479,11 +410,10 @@ class Store:
 
         # With citus enabled ADD COLUMN IF NOT EXISTS fails if it exists
         query = psycopg2.sql.SQL(
-            'SELECT {column} FROM {table} LIMIT 1;'
-        ).format(
-            table=psycopg2.sql.Identifier(table),
-            column=psycopg2.sql.Identifier(column),
-        )
+            'SELECT {column} FROM {table} LIMIT 1;').format(
+                table=psycopg2.sql.Identifier(table),
+                column=psycopg2.sql.Identifier(column),
+            )
 
         try:
             cursor.execute(query)
@@ -492,12 +422,10 @@ class Store:
             columnExists = False
 
         if not columnExists:
-            query = psycopg2.sql.SQL(
-                """
+            query = psycopg2.sql.SQL("""
                     ALTER TABLE {table}
                     ADD COLUMN IF NOT EXISTS {column} {column_type};
-                """
-            ).format(
+                """).format(
                 table=psycopg2.sql.Identifier(table),
                 column=psycopg2.sql.Identifier(column),
                 column_type=psycopg2.sql.SQL(column_type),
@@ -511,16 +439,12 @@ class Store:
         connection = self._get_connection('postgres')
         connection.autocommit = True
         connection.set_isolation_level(
-            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT
-        )
+            psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
         cursor = connection.cursor()
 
         try:
-            query = psycopg2.sql.SQL(
-                'CREATE DATABASE {database}'
-            ).format(
-                database=psycopg2.sql.Identifier(self._namespace),
-            )
+            query = psycopg2.sql.SQL('CREATE DATABASE {database}').format(
+                database=psycopg2.sql.Identifier(self._namespace), )
             cursor.execute(query)
         except psycopg2.errors.DuplicateDatabase:
             pass
