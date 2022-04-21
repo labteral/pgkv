@@ -3,9 +3,11 @@
 
 import psycopg2
 import psycopg2.sql
+from psycopg2.extras import execute_values
 import json
 from datetime import datetime
 from threading import Lock
+from typing import List
 
 
 def thread_safe(method):
@@ -118,12 +120,36 @@ class Store:
 
     @thread_safe
     @rollback_on_error
-    def put(self, table, key, value, column=None):
+    def put(
+        self,
+        table,
+        key=None,
+        value=None,
+        column=None,
+        kv_pairs: List = None,
+    ):
         table = table.lower()
+
+        if (not key or not value) and not kv_pairs:
+            raise ValueError
+
+        if not kv_pairs:
+            kv_pairs = [(key, value)]
+        sample_value = kv_pairs[0][1]
 
         if column is None:
             column = self.DEFAULT_column
         column = column.lower()
+
+        if isinstance(sample_value, dict):
+            kv_pairs = [(
+                key,
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    separators=(',', ':'),
+                ),
+            ) for key, value in kv_pairs]
 
         if table not in self._known_tables:
             self._known_tables[table] = set()
@@ -131,7 +157,7 @@ class Store:
             self._configure_distributed_table(table)
 
         if column not in self._known_tables[table]:
-            self._create_column(table, column, value)
+            self._create_column(table, column, sample_value)
             self._known_tables[table].add(column)
 
         autocommit = True if self._cursor is None else False
@@ -144,30 +170,29 @@ class Store:
                 key,
                 {column}
             )
-            VALUES (
-                %s,
-                %s
-            )
+            VALUES %s
             ON CONFLICT (key) DO UPDATE
-            SET {column} = %s;
+            SET {column} = EXCLUDED.{column}
+            ;
         """).format(
             table=psycopg2.sql.Identifier(table),
             column=psycopg2.sql.Identifier(column),
         )
 
-        if isinstance(value, dict):
-            value = json.dumps(value,
-                               ensure_ascii=False,
-                               separators=(',', ':'))
-
-        self._cursor.execute(query, (key, value, value))
+        execute_values(self._cursor, query, kv_pairs)
 
         if autocommit:
             self.commit()
 
     @thread_safe
     @rollback_on_error
-    def get(self, table, key, column=None, full_row=False):
+    def get(
+        self,
+        table,
+        key,
+        column=None,
+        full_row=False,
+    ):
         table = table.lower()
 
         if column is None:
@@ -214,12 +239,20 @@ class Store:
 
     @thread_safe
     @rollback_on_error
-    def exists(self, table, key):
+    def exists(
+        self,
+        table,
+        key,
+    ):
         return True if self.get(table, key) else False
 
     @thread_safe
     @rollback_on_error
-    def delete(self, table, key):
+    def delete(
+        self,
+        table,
+        key,
+    ):
         table = table.lower()
 
         query = psycopg2.sql.SQL("""
@@ -239,16 +272,18 @@ class Store:
 
     @thread_safe
     @rollback_on_error
-    def scan(self,
-             table,
-             column=None,
-             start_key=None,
-             stop_key=None,
-             order_by=None,
-             order_by_timestamp=False,
-             order=None,
-             limit=None,
-             full_row=False):
+    def scan(
+        self,
+        table,
+        column=None,
+        start_key=None,
+        stop_key=None,
+        order_by=None,
+        order_by_timestamp=False,
+        order=None,
+        limit=None,
+        full_row=False,
+    ):
         table = table.lower()
 
         if order is not None:
@@ -284,7 +319,7 @@ class Store:
         if full_row is True:
             query += '*'
         else:
-            query += '{column}'
+            query += 'key, {column}'
         query += 'FROM {table}'
 
         if start_key is not None and stop_key is not None:
@@ -386,7 +421,12 @@ class Store:
         cursor.close()
         connection.close()
 
-    def _create_column(self, table, column, sample_value):
+    def _create_column(
+        self,
+        table,
+        column,
+        sample_value,
+    ):
         if isinstance(sample_value, str):
             column_type = 'TEXT'
         elif isinstance(sample_value, dict):
@@ -458,7 +498,11 @@ class Store:
 
         connection.close()
 
-    def _get_results(self, rows, remove_keys=False):
+    def _get_results(
+        self,
+        rows,
+        remove_keys=False,
+    ):
         columns = [description[0] for description in self._cursor.description]
 
         results = []
