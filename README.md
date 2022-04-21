@@ -16,6 +16,9 @@ store = Store(
 # Put
 store.put('table_1', 'key_1', 'value_1')
 
+# Put many
+store.put('table_1', kv_pairs=[('key_1', 'value_1'), ('key_2', 'value_2')])
+
 # Get
 value = store.get('table_1', 'key_1')
 
