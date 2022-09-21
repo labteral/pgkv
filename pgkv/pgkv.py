@@ -227,13 +227,13 @@ class Store:
             return None
 
         row = self._cursor.fetchone()
-        result = self._get_results([row], remove_keys=True)[0]
+        if row is None:
+            result = None
+        else:
+            result = self._get_results([row], remove_keys=True)[0]
 
         if autocommit:
             self.commit()
-
-        if not row:
-            return None
 
         return result
 
@@ -515,7 +515,7 @@ class Store:
                     continue
                 if isinstance(value, memoryview):
                     value = result.tobytes()
-                result[column] = row[index]
+                result[column] = value
 
             results.append(result)
 
