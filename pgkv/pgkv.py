@@ -127,6 +127,7 @@ class Store:
         value=None,
         column=None,
         kv_pairs: List = None,
+        upsert=True,
     ):
         table = table.lower()
 
@@ -166,19 +167,21 @@ class Store:
         if autocommit:
             self.begin()
 
-        query = psycopg2.sql.SQL(
-            """
+        query = """
             INSERT INTO {table}
             (
                 key,
                 {column}
             )
             VALUES %s
-            ON CONFLICT (key) DO UPDATE
-            SET {column} = EXCLUDED.{column}
-            ;
         """
-        ).format(
+        if upsert is True:
+            query += """
+                ON CONFLICT (key) DO UPDATE
+                SET {column} = EXCLUDED.{column}
+            """
+
+        query = psycopg2.sql.SQL(query).format(
             table=psycopg2.sql.Identifier(table),
             column=psycopg2.sql.Identifier(column),
         )
