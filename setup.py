@@ -27,6 +27,7 @@ setup(
     ],
     python_requires=">=3.6",
     install_requires=[
-        'psycopg2'
+        'psycopg2-binary >= 2.9.7, < 3.0.0',
+        'psycopg2 >= 2.9.7, < 3.0.0',
     ]
 )

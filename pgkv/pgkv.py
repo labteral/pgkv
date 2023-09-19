@@ -466,11 +466,11 @@ class Store:
         cursor = connection.cursor()
 
         # With citus enabled ADD COLUMN IF NOT EXISTS fails if it exists
-        query = psycopg2.sql.SQL('SELECT {column} FROM {table} LIMIT 1;'
-                                 ).format(
-                                     table=psycopg2.sql.Identifier(table),
-                                     column=psycopg2.sql.Identifier(column),
-                                 )
+        query = psycopg2.sql.SQL(
+            'SELECT {column} FROM {table} LIMIT 1;').format(
+            table=psycopg2.sql.Identifier(table),
+            column=psycopg2.sql.Identifier(column),
+        )
 
         try:
             cursor.execute(query)
