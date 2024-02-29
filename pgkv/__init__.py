@@ -3,4 +3,4 @@
 
 from .pgkv import Store  # noqa: F401
 
-__version__ = '1.2308.0'
+__version__ = '0.2402.0'

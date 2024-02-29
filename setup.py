@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from setuptools import setup
-from setuptools import find_packages
+from setuptools import find_packages, setup
+
 import pgkv
 
 setup(
@@ -27,7 +27,7 @@ setup(
     ],
     python_requires=">=3.6",
     install_requires=[
-        'psycopg2-binary >= 2.9.7, < 3.0.0',
-        'psycopg2 >= 2.9.7, < 3.0.0',
+        'psycopg2-binary >= 2.9.9, < 3.0.0',
+        'psycopg2 >= 2.9.9, < 3.0.0',
     ]
 )

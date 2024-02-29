@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import psycopg2
-import psycopg2.sql
-from psycopg2.extras import execute_values
 import json
 from datetime import datetime
 from threading import Lock
 from typing import List
+
+import psycopg2
+import psycopg2.sql
+from psycopg2.extras import execute_values
 
 
 def thread_safe(method):
@@ -525,7 +526,7 @@ class Store:
         try:
             query = 'CREATE EXTENSION IF NOT EXISTS citus;'
             cursor.execute(query)
-        except psycopg2.errors.UndefinedFile:
+        except psycopg2.errors.FeatureNotSupported:
             pass
 
         cursor.close()
